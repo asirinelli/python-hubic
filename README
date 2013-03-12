@@ -1,0 +1,16 @@
+Simple ftp-like command line for hubic (https://hubic.com/)
+(c) 2013 Antoine Sirinelli <antoine@monte-stello.com>
+
+Licence: GPLv2+
+
+To run it, follow the procedure:
+$ virtualenv virtual
+$ source ./virtual/bin/activate
+$ pip install -r requirements.txt 
+$ ./hubic_ftp me@example.com
+
+Enjoy.
+
+The required python modules are requests and python-swiftclient. Note
+that the python-swiftclient version available in Debian wheezy is not
+recent enough. Hence the use of virtualenv.
