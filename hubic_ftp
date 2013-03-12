@@ -1,0 +1,196 @@
+#!/usr/bin/env python
+
+import requests
+import json
+from getpass import getpass
+from base64 import b64decode
+import sys
+from swiftclient import Connection
+import cmd
+import os
+
+class FTPlike(cmd.Cmd):
+    prompt = '/> '
+    def __init__(self, connection):
+        cmd.Cmd.__init__(self)
+        self.conn = connection
+        self.actual_dir = None
+    
+    def __get_list_containers(self):
+        out = {}
+        for c in self.conn.get_container('')[1]:
+            out[c['name']] = c
+        return out
+
+    def __get_list_objects(self, container):
+        out = {}
+        for o in self.conn.get_container(container)[1]:
+            out[o['name']] = o
+        return out
+
+    def do_ls(self, container):
+        if not container and self.actual_dir:
+            container = self.actual_dir
+        if container == '/':
+            container = None
+        if not container:
+            cont = self.__get_list_containers()
+            for name in sorted(cont.keys()):
+                print name, cont[name]['bytes'], cont[name]['count']
+        elif container in self.__get_list_containers().keys():
+            objs = self.__get_list_objects(container)
+            for name in sorted(objs.keys()):
+                print name, objs[name]['bytes'], objs[name]['content_type']
+        else:
+            print "No such container"
+
+    def complete_ls(self, text, line, begidx, endidx):
+        complete = self.__complete_containers(text)
+        return complete
+
+    def __complete_containers(self, text):
+        choices = sorted(self.__get_list_containers().keys())
+        if not text:
+            completion = choices
+        else:
+            completion = [c for c in choices if c.startswith(text)]
+        return completion
+
+    def __complete_objects(self, container, text):
+        choices = sorted(self.__get_list_objects(container).keys())
+        if not text:
+            completion = choices
+        else:
+            completion = [c for c in choices if c.startswith(text)]
+        return completion
+
+    def do_cd(self, line):
+        if line == '/' or line == "..":
+            self.actual_dir = None
+            self.prompt = '/> '
+        elif line in self.__get_list_containers().keys():
+            self.actual_dir = line
+            self.prompt = '/'+line+'> '
+        else:
+            print "No such file or directory"
+
+    def complete_cd(self, text, line, begidx, endidx):
+        return sorted(self.__complete_containers(text))
+
+    def do_get(self, ob):
+        if not self.actual_dir:
+            print "cd to a container first"
+            return
+        if ob in self.__get_list_objects(self.actual_dir).keys():
+            res, dat = conn.get_object(self.actual_dir, ob)
+            file(ob, 'wb').write(dat)
+            print res
+    
+    def complete_get(self, text, line, begidx, endidx):
+        if self.actual_dir:
+            return self.__complete_objects(self.actual_dir, text)
+        else:
+            return []
+
+    def do_put(self, line):
+        if not self.actual_dir:
+            print "Move to a container first"
+            return
+        try:
+            f = open(line, 'rb')
+        except IOError:
+            print "No such file"
+            return
+        self.conn.put_object(self.actual_dir, line, f.read())
+
+    def complete_put(self, text, line, begidx, endidx):
+        if not self.actual_dir:
+            return []
+        choices = sorted(os.listdir('.'))
+        if not text:
+            return choices
+        else:
+            return [f for f in choices if f.startswith(text)]
+
+    def do_rm(self, line):
+        if not self.actual_dir:
+            print "TBD"
+        elif line in self.__get_list_objects(self.actual_dir).keys():
+            self.conn.delete_object(self.actual_dir, line)
+        else:
+            print "No such file"
+
+    def complete_rm(self, text, l, b,e):
+        if not self.actual_dir:
+            return []
+        else:
+            return self.__complete_objects(self.actual_dir, text)
+
+    def do_EOF(self, line):
+        return True
+
+class auth_hubic:
+    def __init__(self, user, passwd):
+        self.SessionHandler = 'https://ws.ovh.com/sessionHandler/r4/'
+        self.hubicws = 'https://ws.ovh.com/hubic/r5/'
+
+        r = requests.get(self.SessionHandler + 'rest.dispatcher/' + 'getAnonymousSession')
+        sessionId = r.json()['answer']['session']['id']
+
+        params = { 'sessionId': sessionId,
+                   'email': user}
+        payload = {'params': json.dumps(params)}
+
+        r = requests.get(self.hubicws + 'rest.dispatcher/' + 'getHubics',
+                         params=payload)
+        hubics = r.json()
+        self.hubicsId = hubics['answer'][0]['id']
+
+        params = { 'login': hubics['answer'][0]['nic'],
+                   'password': passwd,
+                   'context': 'hubic'}
+        payload = {'params': json.dumps(params)}
+
+        r = requests.get(self.SessionHandler + 'rest.dispatcher/' + 'login',
+                         params=payload)
+
+        self.sessionId = r.json()['answer']['session']['id']
+
+    def get_credentials(self):
+        params = { 'sessionId': self.sessionId,
+                   'hubicId': self.hubicsId}
+        payload = {'params': json.dumps(params)}
+
+        r = requests.get(self.hubicws + 'rest.dispatcher/' + 'getHubic',
+                         params=payload)
+        Storage_Url = b64decode(r.json()['answer']['credentials']['username'])
+        Auth_Token = r.json()['answer']['credentials']['secret']
+        return Storage_Url, Auth_Token
+
+    def logout(self):
+        params = { 'sessionId': self.sessionId}
+        payload = {'params': json.dumps(params)}
+        r = requests.get(self.SessionHandler + 'rest.dispatcher/' + 'logout',
+                         params=payload)
+
+if len(sys.argv) != 2:
+    print "Please supply your email:"
+    print sys.argv[0] + " email"
+    sys.exit(1)
+
+user = sys.argv[1]
+passwd = getpass()
+hubic = auth_hubic(user, passwd)
+storage_url, auth_token = hubic.get_credentials()
+
+options = {'auth_token': auth_token,
+           'object_storage_url': storage_url}
+conn = Connection(os_options=options, auth_version=2)
+
+FTPlike(conn).cmdloop()
+
+hubic.logout()
+
+
+#print 'OS_STORAGE_URL="'+Storage_Url+'"'
+#print 'OS_AUTH_TOKEN='+Auth_Token
